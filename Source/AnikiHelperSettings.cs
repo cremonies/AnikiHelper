@@ -3736,6 +3736,14 @@ namespace AnikiHelper
             set => SetValue(ref activeFilterBackgroundPath, value ?? string.Empty);
         }
 
+        private string activePlatformBackgroundPath = string.Empty;
+        [DontSerialize]
+        public string ActivePlatformBackgroundPath
+        {
+            get => activePlatformBackgroundPath;
+            set => SetValue(ref activePlatformBackgroundPath, value ?? string.Empty);
+        }
+
         private string customSourceIconsFolder = string.Empty;
         public string CustomSourceIconsFolder
         {

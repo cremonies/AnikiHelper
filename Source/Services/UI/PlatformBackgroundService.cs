@@ -1,7 +1,5 @@
-﻿using Playnite.SDK;
-using Playnite.SDK.Models;
+using Playnite.SDK;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -9,8 +7,8 @@ using System.Windows.Threading;
 
 namespace AnikiHelper.Services.UI
 {
-    /// <summary>Resolves the background for the active named filter preset.</summary>
-    public sealed class FilterBackgroundService : IDisposable
+    /// <summary>Resolves the main-view background for the selected game's platform, from Icons/FilterBackground.</summary>
+    public sealed class PlatformBackgroundService : IDisposable
     {
         private readonly IPlayniteAPI api;
         private readonly AnikiHelperSettings settings;
@@ -18,15 +16,14 @@ namespace AnikiHelper.Services.UI
         private readonly Func<string> themePathProvider;
 
         private DispatcherTimer refreshTimer;
-        private string lastPresetId = string.Empty;
-        private string lastPresetName = string.Empty;
+        private string lastPlatformName = string.Empty;
         private string lastCustomFolder = string.Empty;
         private string lastThemePath = string.Empty;
         private string lastResolvedPath = string.Empty;
         private DateTime nextMissingPathProbeUtc = DateTime.MinValue;
         private bool invalidated = true;
 
-        public FilterBackgroundService(
+        public PlatformBackgroundService(
             IPlayniteAPI api,
             AnikiHelperSettings settings,
             ILogger logger,
@@ -69,7 +66,7 @@ namespace AnikiHelper.Services.UI
             }
             catch (Exception ex)
             {
-                logger?.Warn(ex, "[AnikiHelper][FilterBackground] Failed to start filter background service.");
+                logger?.Warn(ex, "[AnikiHelper][PlatformBackground] Failed to start platform background service.");
             }
         }
 
@@ -115,7 +112,7 @@ namespace AnikiHelper.Services.UI
             }
             catch (Exception ex)
             {
-                logger?.Warn(ex, "[AnikiHelper][FilterBackground] Failed to refresh filter background.");
+                logger?.Warn(ex, "[AnikiHelper][PlatformBackground] Failed to refresh platform background.");
             }
         }
 
@@ -128,9 +125,7 @@ namespace AnikiHelper.Services.UI
         {
             try
             {
-                var activePreset = GetActiveFilterPreset();
-                var presetId = activePreset?.Id.ToString() ?? string.Empty;
-                var presetName = activePreset?.Name ?? string.Empty;
+                var platformName = GetSelectedGamePlatformName();
                 var customFolder = settings?.CustomFilterBackgroundsFolder ?? string.Empty;
                 var themePath = themePathProvider?.Invoke() ?? string.Empty;
 
@@ -140,8 +135,7 @@ namespace AnikiHelper.Services.UI
                 var shouldResolve = invalidated ||
                                     currentPathMissing ||
                                     missingPathProbeDue ||
-                                    !string.Equals(lastPresetId, presetId, StringComparison.OrdinalIgnoreCase) ||
-                                    !string.Equals(lastPresetName, presetName, StringComparison.Ordinal) ||
+                                    !string.Equals(lastPlatformName, platformName, StringComparison.Ordinal) ||
                                     !string.Equals(lastCustomFolder, customFolder, StringComparison.OrdinalIgnoreCase) ||
                                     !string.Equals(lastThemePath, themePath, StringComparison.OrdinalIgnoreCase);
 
@@ -150,10 +144,9 @@ namespace AnikiHelper.Services.UI
                     return;
                 }
 
-                var resolvedPath = ResolveBackgroundPath(presetName, customFolder, themePath);
+                var resolvedPath = ResolveBackgroundPath(platformName, customFolder, themePath);
 
-                lastPresetId = presetId;
-                lastPresetName = presetName;
+                lastPlatformName = platformName;
                 lastCustomFolder = customFolder;
                 lastThemePath = themePath;
                 lastResolvedPath = resolvedPath;
@@ -164,48 +157,29 @@ namespace AnikiHelper.Services.UI
 
                 if (settings != null)
                 {
-                    settings.ActiveFilterPresetName = presetName;
-                    settings.ActiveFilterBackgroundPath = resolvedPath;
+                    settings.ActivePlatformBackgroundPath = resolvedPath;
                 }
             }
             catch (Exception ex)
             {
-                logger?.Warn(ex, "[AnikiHelper][FilterBackground] Failed to resolve active filter background.");
+                logger?.Warn(ex, "[AnikiHelper][PlatformBackground] Failed to resolve active platform background.");
             }
         }
 
-        private FilterPreset GetActiveFilterPreset()
+        private string GetSelectedGamePlatformName()
         {
             try
             {
-                if (api?.MainView == null || api.Database?.FilterPresets == null)
-                {
-                    return null;
-                }
-
-                // GetActiveFilterPreset returns the ID of a named preset. Boxing the
-                // result keeps this code compatible whether the SDK exposes Guid or Guid?.
-                var activePresetIdObject = (object)api.MainView.GetActiveFilterPreset();
-                if (activePresetIdObject == null)
-                {
-                    return null;
-                }
-
-                if (!Guid.TryParse(activePresetIdObject.ToString(), out var activePresetId) ||
-                    activePresetId == Guid.Empty)
-                {
-                    return null;
-                }
-
-                return api.Database.FilterPresets.FirstOrDefault(x => x != null && x.Id == activePresetId);
+                var game = api?.MainView?.SelectedGames?.FirstOrDefault();
+                return game?.Platforms?.FirstOrDefault()?.Name ?? string.Empty;
             }
             catch
             {
-                return null;
+                return string.Empty;
             }
         }
 
-        private string ResolveBackgroundPath(string presetName, string customFolder, string themePath)
+        private string ResolveBackgroundPath(string platformName, string customFolder, string themePath)
         {
             var themeFolder = string.IsNullOrWhiteSpace(themePath)
                 ? string.Empty
@@ -215,7 +189,7 @@ namespace AnikiHelper.Services.UI
                 ? string.Empty
                 : Path.Combine(themePath, "Images", "FilterBackgrounds");
 
-            return ThemeBackgroundImageResolver.ResolveBackgroundPath(presetName, customFolder, themeFolder, legacyThemeFolder);
+            return ThemeBackgroundImageResolver.ResolveBackgroundPath(platformName, customFolder, themeFolder, legacyThemeFolder);
         }
 
         public void Dispose()
