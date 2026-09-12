@@ -288,7 +288,6 @@ namespace AnikiHelper
         private int deferredSteamUpdateCacheStartupPrompt;
         private readonly AnikiThemeSettingsService anikiThemeSettingsService;
         private readonly FilterBackgroundService filterBackgroundService;
-        private readonly PlatformBackgroundService platformBackgroundService;
         private readonly AnikiScreenSaverService screenSaverService;
         private readonly NavigationFixService horizontalFocusFixService;
         private readonly KonamiCodeService konamiCodeService;
@@ -8612,12 +8611,6 @@ namespace AnikiHelper
                 logger,
                 () => anikiThemeSettingsService?.CurrentThemePath);
 
-            platformBackgroundService = new PlatformBackgroundService(
-                api,
-                Settings,
-                logger,
-                () => anikiThemeSettingsService?.CurrentThemePath);
-
             Settings.FirstSetup = new AnikiFirstSetupViewModel(
                 this,
                 api,
@@ -8739,7 +8732,6 @@ namespace AnikiHelper
                 if (e.PropertyName == nameof(Settings.CustomFilterBackgroundsFolder))
                 {
                     filterBackgroundService?.Invalidate();
-                    platformBackgroundService?.Invalidate();
                 }
 
                 if (e.PropertyName == nameof(Settings.ScreenSaverEnabled) && !Settings.ScreenSaverEnabled)
@@ -21173,7 +21165,6 @@ namespace AnikiHelper
                         anikiThemeSettingsService?.LoadAndApply();
                         ApplySteamBannerResetMigration();
                         filterBackgroundService?.Start();
-                        platformBackgroundService?.Start();
                         screenSaverService?.Start();
                         DebugLog($"[AnikiHelper][OnApplicationStarted] anikiThemeSettingsService.LoadAndApply + migrations + filter backgrounds + ScreenSaver took {sw.ElapsedMilliseconds}ms");
                     }
@@ -23332,7 +23323,6 @@ namespace AnikiHelper
             try { navigationSettleTimer?.Stop(); } catch { }
             try { anikiThemeSettingsService?.StopFocusedCoverOverlay(); } catch { }
             try { filterBackgroundService?.Stop(); } catch { }
-            try { platformBackgroundService?.Stop(); } catch { }
             try { screenSaverService?.Dispose(); } catch { }
             try { videoLibraryManagerWindow?.Close(); } catch { }
             videoLibraryManagerWindow = null;

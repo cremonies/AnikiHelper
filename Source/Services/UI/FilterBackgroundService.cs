@@ -12,6 +12,10 @@ namespace AnikiHelper.Services.UI
     /// <summary>Resolves the background for the active named filter preset.</summary>
     public sealed class FilterBackgroundService : IDisposable
     {
+        private static readonly HashSet<string> SupportedExtensions = new HashSet<string>(
+            new[] { ".jpg", ".jpeg", ".png", ".webp", ".bmp" },
+            StringComparer.OrdinalIgnoreCase);
+
         private readonly IPlayniteAPI api;
         private readonly AnikiHelperSettings settings;
         private readonly ILogger logger;
@@ -215,7 +219,68 @@ namespace AnikiHelper.Services.UI
                 ? string.Empty
                 : Path.Combine(themePath, "Images", "FilterBackgrounds");
 
-            return ThemeBackgroundImageResolver.ResolveBackgroundPath(presetName, customFolder, themeFolder, legacyThemeFolder);
+            // Priority: exact user image -> exact theme image -> legacy theme image -> user Default -> theme Default -> legacy Default.
+            var path = FindImage(customFolder, presetName);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                return path;
+            }
+
+            path = FindImage(themeFolder, presetName);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                return path;
+            }
+
+            path = FindImage(legacyThemeFolder, presetName);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                return path;
+            }
+
+            path = FindImage(customFolder, "Default");
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                return path;
+            }
+
+            path = FindImage(themeFolder, "Default");
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                return path;
+            }
+
+            path = FindImage(legacyThemeFolder, "Default");
+            return path ?? string.Empty;
+        }
+
+        private static string FindImage(string folder, string fileNameWithoutExtension)
+        {
+            if (string.IsNullOrWhiteSpace(folder) ||
+                string.IsNullOrWhiteSpace(fileNameWithoutExtension) ||
+                !Directory.Exists(folder))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                var match = Directory
+                    .EnumerateFiles(folder, "*", SearchOption.TopDirectoryOnly)
+                    .Where(path => SupportedExtensions.Contains(Path.GetExtension(path)))
+                    .FirstOrDefault(path => string.Equals(
+                        Path.GetFileNameWithoutExtension(path),
+                        fileNameWithoutExtension,
+                        StringComparison.OrdinalIgnoreCase));
+
+                return string.IsNullOrWhiteSpace(match)
+                    ? string.Empty
+                    : Path.GetFullPath(match).Replace("\\", "/");
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         public void Dispose()
