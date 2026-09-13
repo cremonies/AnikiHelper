@@ -259,6 +259,19 @@ namespace AnikiHelper
         private readonly EventSoundService eventSoundService;
         private readonly AnikiWindowManager anikiWindowManager;
         private readonly InGameOverlayService inGameOverlayService;
+
+        // A real, separate blocking "Now Playing" window for the FULL duration of a
+        // Fullscreen-mode game session — distinct from inGameOverlayService (a
+        // hotkey-summoned in-game quick-access overlay) and from the post-launch
+        // focus watchdog above (which only guards the first few seconds while a
+        // launcher's real window is still appearing). This instead guards the entire
+        // session: if Playnite's own window becomes foreground again at any point
+        // while a game is running — Alt+Tab, the taskbar, the Windows/Xbox Guide
+        // button — this takes over instead of leaving Playnite's normal, fully
+        // navigable game list reachable underneath. Keyed by game Id in case Playnite
+        // ever reports more than one game running at once.
+        private readonly Dictionary<Guid, NativePlaySessionOverlay> nativePlaySessionOverlays =
+            new Dictionary<Guid, NativePlaySessionOverlay>();
         private readonly AnikiWebBrowserService webBrowserService;
         private readonly AnikiVideoPlayerService videoPlayerService;
         private Window videoLibraryManagerWindow;
@@ -26034,6 +26047,29 @@ namespace AnikiHelper
             }
         }
 
+        // Force-closes a game tracked by NativePlaySessionOverlay. Confirmation dialog
+        // first since this kills the process outright — same pattern NAS Connector
+        // uses for its own "Play from NAS" sessions.
+        private void StopNativePlaySession(Guid gameId, Process process)
+        {
+            try
+            {
+                var confirmed = PlayniteApi.Dialogs.ShowMessage(
+                    "Force close this game? Any unsaved progress will be lost.",
+                    "Aniki Helper",
+                    System.Windows.MessageBoxButton.YesNo) == System.Windows.MessageBoxResult.Yes;
+                if (!confirmed)
+                    return;
+
+                if (!process.HasExited)
+                    process.Kill();
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, $"[AnikiHelper][PlaySessionOverlay][StopFailed] GameId={gameId}");
+            }
+        }
+
         public override void OnGameStarted(OnGameStartedEventArgs args)
         {
             var swTotal = Stopwatch.StartNew();
@@ -26095,6 +26131,38 @@ namespace AnikiHelper
                         $"Reason={(isFullscreen ? "ThemeNotActive" : "NotFullscreen")}, " +
                         $"Game='{g?.Name ?? "NULL"}'"
                     );
+                }
+
+                // Independent of the theme — this just minimizes Playnite's own window
+                // and, if it comes back to the foreground while the game is still
+                // running, shows a blocking screen instead. Only makes sense in
+                // Fullscreen mode (Desktop mode users expect to keep using Playnite
+                // alongside a running game).
+                if (isFullscreen && g != null && (args?.StartedProcessId ?? 0) > 0)
+                {
+                    try
+                    {
+                        var nativeProcess = Process.GetProcessById(args.StartedProcessId);
+                        if (nativePlaySessionOverlays.TryGetValue(g.Id, out var stalePlaySession))
+                        {
+                            stalePlaySession.Dispose();
+                            nativePlaySessionOverlays.Remove(g.Id);
+                        }
+
+                        var capturedGameId = g.Id;
+                        nativePlaySessionOverlays[g.Id] = new NativePlaySessionOverlay(
+                            nativeProcess,
+                            g.Name,
+                            () => StopNativePlaySession(capturedGameId, nativeProcess));
+
+                        DebugLog($"[AnikiHelper][PlaySessionOverlay][Created] Game='{g.Name}', PID={args.StartedProcessId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        // The process may have already exited (very short-lived
+                        // launcher hand-off) — nothing to guard in that case.
+                        DebugLog($"[AnikiHelper][PlaySessionOverlay][Skip] Game='{g.Name}', PID={args?.StartedProcessId}, Reason={ex.Message}");
+                    }
                 }
 
                 var shouldRunSplashGameReady =
@@ -26253,6 +26321,13 @@ namespace AnikiHelper
 
                 var g = args?.Game;
                 ClearGameReadyLaunchBaseline(g?.Id);
+
+                if (g != null && nativePlaySessionOverlays.TryGetValue(g.Id, out var endedPlaySession))
+                {
+                    endedPlaySession.Dispose();
+                    nativePlaySessionOverlays.Remove(g.Id);
+                    DebugLog($"[AnikiHelper][PlaySessionOverlay][Disposed] Game='{g.Name}'");
+                }
 
                 eventSoundService.PlayGameStopped();
                 DebugLog($"[AnikiHelper][GameStopped][Sound] Game stopped sound requested. Game='{g?.Name ?? "NULL"}'");
