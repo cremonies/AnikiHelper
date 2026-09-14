@@ -21,6 +21,17 @@ namespace AnikiHelper.Services.UI
     // button-to-keypress translation targets whichever window Windows considers the
     // real foreground one, not whatever a single window's WPF visual tree considers
     // "contained."
+    //
+    // The window itself is built and shown once, immediately, and stays alive
+    // (non-topmost, unfocused) for the entire session rather than only being built
+    // reactively when Playnite regains focus — see the constructor and
+    // PromoteToForeground. That's what actually closes the launch/closing transition
+    // gap: with Playnite minimized and nothing else in place, the instant the game's
+    // own window is destroyed on exit, Windows would otherwise have nothing to reveal
+    // except the real desktop for however long it then takes OnGameStopped to run and
+    // react — long enough to see. A window that's already there and already painted
+    // gets promoted to the front with zero extra latency; nothing shown reactively
+    // afterwards can undo a frame the OS already presented.
     internal sealed class NativePlaySessionOverlay : IDisposable
     {
         private readonly System.Diagnostics.Process process;
@@ -46,6 +57,17 @@ namespace AnikiHelper.Services.UI
                 playniteWindow.Activated += OnPlayniteWindowActivated;
                 playniteWindow.WindowState = WindowState.Minimized;
             }
+
+            // ShowActivated=false so building this doesn't itself steal focus from
+            // Playnite/the not-yet-appeared game.
+            overlayWindow = BuildWindow();
+            overlayWindow.ShowActivated = false;
+            overlayWindow.Show();
+
+            sessionTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            sessionTimer.Tick += (s, e) => UpdateSessionLengthText();
+            sessionTimer.Start();
+            UpdateSessionLengthText();
         }
 
         private void OnPlayniteWindowActivated(object sender, EventArgs e)
@@ -54,36 +76,23 @@ namespace AnikiHelper.Services.UI
             // most likely a task switch (Alt+Tab, taskbar, the Windows/Xbox Guide
             // button). Show this screen instead of leaving Playnite's normal,
             // fully-navigable UI reachable underneath.
-            ShowOverlay();
+            PromoteToForeground();
         }
 
-        private void ShowOverlay()
+        // Brings the already-existing curtain window to the front — used both when
+        // Playnite is reactivated mid-session (above) and when the game exits (see
+        // Dispose), so the restore happens hidden underneath the same cover either
+        // way. Never rebuilds the window; it's alive for the whole session.
+        private void PromoteToForeground()
         {
-            if (disposed)
+            if (disposed || overlayWindow == null)
                 return;
 
-            if (overlayWindow != null)
-            {
-                overlayWindow.Activate();
-                return;
-            }
-
-            overlayWindow = BuildWindow();
-            overlayWindow.Closed += (s, e) =>
-            {
-                sessionTimer?.Stop();
-                sessionTimer = null;
-                overlayWindow = null;
-            };
-
-            overlayWindow.Show();
+            overlayWindow.Topmost = true;
             overlayWindow.Activate();
 
-            sessionTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-            sessionTimer.Tick += (s, e) => UpdateSessionLengthText();
-            sessionTimer.Start();
-            UpdateSessionLengthText();
-
+            // Nothing should be reachable behind this screen — send Playnite back
+            // down immediately in case it briefly flashed up before this took effect.
             if (playniteWindow != null)
                 playniteWindow.WindowState = WindowState.Minimized;
         }
@@ -189,7 +198,12 @@ namespace AnikiHelper.Services.UI
                 WindowStyle = WindowStyle.None,
                 ResizeMode = ResizeMode.NoResize,
                 WindowState = WindowState.Maximized,
-                Topmost = true,
+                // Starts NOT topmost: this window is alive for the whole session (see
+                // the constructor) sitting passively behind the game's own window, and
+                // Topmost=true from the start would put it in front of the game before
+                // it even launches. PromoteToForeground (Alt+Tab back to Playnite, or
+                // the game exiting) is what raises it when it actually needs to block.
+                Topmost = false,
                 ShowInTaskbar = false,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen
             };
@@ -204,10 +218,14 @@ namespace AnikiHelper.Services.UI
             return window;
         }
 
+        // Demotes rather than closes: the window stays alive, passively behind the
+        // game again, ready to be promoted the next time it's actually needed (another
+        // Alt+Tab back, or the game finally exiting).
         public void ReturnToGame()
         {
             BringProcessToForeground(process);
-            overlayWindow?.Close();
+            if (overlayWindow != null)
+                overlayWindow.Topmost = false;
         }
 
         public void Dispose()
@@ -223,14 +241,27 @@ namespace AnikiHelper.Services.UI
             sessionTimer?.Stop();
             sessionTimer = null;
 
-            overlayWindow?.Close();
-            overlayWindow = null;
+            // Bring the curtain to the front FIRST, so the Playnite restore below
+            // happens hidden underneath it, then only close the curtain once Playnite
+            // is already normal and active underneath — never the other way around,
+            // or the moment between restoring Playnite and closing this window would
+            // itself be a visible flash of exactly the kind this class exists to avoid.
+            if (overlayWindow != null)
+            {
+                overlayWindow.Topmost = true;
+                overlayWindow.Activate();
+            }
 
             if (playniteWindow != null)
             {
                 playniteWindow.WindowState = WindowState.Normal;
                 playniteWindow.Activate();
             }
+
+            // Only now — Playnite is already restored and active underneath — does
+            // taking the curtain away actually reveal it instead of the desktop.
+            overlayWindow?.Close();
+            overlayWindow = null;
         }
 
         private static void BringProcessToForeground(System.Diagnostics.Process process)
