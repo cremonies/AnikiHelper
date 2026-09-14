@@ -24201,9 +24201,37 @@ namespace AnikiHelper
                 minimumDuration = customDuration;
             }
 
-            _ = splashScreenRuntimeService.CloseAfterPlayniteForegroundAsync(minimumDuration, GameLaunchSplashHardSafetyMs);
+            _ = splashScreenRuntimeService.CloseAfterFixedDurationThenAsync(minimumDuration, ReactivatePlayniteWindow);
 
             return true;
+        }
+
+        // Runs only after the closing splash has actually closed — nothing of ours
+        // is left competing for foreground at that point, so this reliably wins.
+        private void ReactivatePlayniteWindow()
+        {
+            try
+            {
+                var window = System.Windows.Application.Current?.MainWindow;
+                if (window == null)
+                    return;
+
+                void DoActivate()
+                {
+                    if (window.WindowState == System.Windows.WindowState.Minimized)
+                        window.WindowState = System.Windows.WindowState.Normal;
+                    window.Activate();
+                }
+
+                if (window.Dispatcher.CheckAccess())
+                    DoActivate();
+                else
+                    window.Dispatcher.Invoke(DoActivate);
+            }
+            catch (Exception ex)
+            {
+                logger.Warn(ex, "[AnikiHelper][ClosingSplash] Failed to reactivate Playnite after close.");
+            }
         }
 
         // Public integration point mirroring ShowExternalGameLaunchSplash, for the

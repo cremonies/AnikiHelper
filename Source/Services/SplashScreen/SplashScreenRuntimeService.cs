@@ -340,72 +340,31 @@ namespace AnikiHelper.Services.SplashScreen
             Close();
         }
 
-        // For the closing-transition splash: the inverse of CloseAfterMinimumAndFocusLossAsync
-        // above. That one closes once Playnite loses focus (the game took over); this one
-        // closes once Playnite regains it (the game exited and Playnite's own window is
-        // back), so whatever the restore itself looks like happens hidden underneath.
-        public async Task CloseAfterPlayniteForegroundAsync(int minimumDurationMs, int maximumWaitMs)
+        // For the closing-transition splash. NOT the inverse of
+        // CloseAfterMinimumAndFocusLossAsync above — polling "is Playnite foreground
+        // yet" while THIS splash is itself still open and Topmost doesn't work
+        // reliably: activating Playnite races against our own window in the same
+        // process, and can time out without Playnite ever actually winning focus.
+        // Simpler and correct instead: close on a fixed timer (no polling), then hand
+        // the caller a clean signal to activate Playnite themselves — guaranteed to
+        // happen only once nothing of ours is competing for foreground anymore.
+        public async Task CloseAfterFixedDurationThenAsync(int durationMs, Action afterClosed)
         {
             try
             {
-                CancelLaunchFailureSafety();
-
-                var remainingMinimumDelay = GetRemainingMinimumDelay(minimumDurationMs);
-                var normalizedMaximumWait = Math.Max(0, maximumWaitMs);
-                var hardSafetyDelay = remainingMinimumDelay + normalizedMaximumWait + HardSafetyExtraMs;
-
-                var normalCloseTask = CloseAfterMinimumAndForegroundGainAsync(remainingMinimumDelay, normalizedMaximumWait);
-                var hardSafetyTask = Task.Delay(hardSafetyDelay);
-                var completedTask = await Task.WhenAny(normalCloseTask, hardSafetyTask);
-
-                if (completedTask == hardSafetyTask)
+                await CloseAfterFixedDurationAsync(durationMs);
+            }
+            finally
+            {
+                try
                 {
-                    logger.Warn($"[AnikiHelper] Closing-splash hard safety timeout reached after {hardSafetyDelay} ms. Forcing close.");
-                    Close();
+                    afterClosed?.Invoke();
                 }
-                else
+                catch (Exception ex)
                 {
-                    await normalCloseTask;
+                    logger.Warn(ex, "[AnikiHelper] Closing-splash afterClosed callback failed.");
                 }
             }
-            catch (Exception ex)
-            {
-                logger.Warn(ex, "[AnikiHelper] Closing splash runtime close failed.");
-                Close();
-            }
-        }
-
-        private async Task CloseAfterMinimumAndForegroundGainAsync(int remainingMinimumDelay, int maximumWaitMs)
-        {
-            if (remainingMinimumDelay > 0)
-            {
-                await Task.Delay(remainingMinimumDelay);
-            }
-
-            var waited = 0;
-
-            while (waited < maximumWaitMs)
-            {
-                if (isPlayniteForegroundWindow())
-                {
-                    // Stability check — confirm Playnite stays foreground, not just a
-                    // brief flicker (e.g. a transient window flashing up mid-shutdown).
-                    await Task.Delay(FocusLossStabilityMs);
-
-                    if (isPlayniteForegroundWindow())
-                    {
-                        Close();
-                        return;
-                    }
-
-                    DebugLog("[AnikiHelper] Playnite lost foreground again during stability check. Keeping closing splash open.");
-                }
-
-                await Task.Delay(ForegroundCheckIntervalMs);
-                waited += ForegroundCheckIntervalMs;
-            }
-
-            Close();
         }
 
         public void Close()
