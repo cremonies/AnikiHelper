@@ -23962,131 +23962,187 @@ namespace AnikiHelper
                     return;
                 }
 
-                var splashEnabled = Settings?.GameLaunchSplashEnabled ?? false;
-                var isFullscreen = PlayniteApi?.ApplicationInfo?.Mode == ApplicationMode.Fullscreen;
-                var isAnikiTheme = IsAnikiThemeActive();
-
-                DebugLog(
-                    $"[AnikiHelper][GameStarting][State] " +
-                    $"Game='{game.Name}', " +
-                    $"Fullscreen={isFullscreen}, " +
-                    $"AnikiTheme={isAnikiTheme}, " +
-                    $"SplashEnabled={splashEnabled}"
-                );
-
-                if (!splashEnabled)
-                {
-                    DebugLog($"[AnikiHelper][GameStarting][STOP] Splash disabled in settings. Game='{game.Name}'");
-                    return;
-                }
-
-                if (!isFullscreen)
-                {
-                    DebugLog($"[AnikiHelper][GameStarting][STOP] Playnite is not in Fullscreen mode. Game='{game.Name}'");
-                    return;
-                }
-
-                if (!isAnikiTheme)
-                {
-                    DebugLog($"[AnikiHelper][GameStarting][STOP] Aniki theme is not active. Game='{game.Name}'");
-                    return;
-                }
-
-                splashScreenRuntimeService?.Close();
-                ReleaseUniPlaySongGameStartingPause(game.Id);
-                var pauseUps = Settings?.GameLaunchSplashPauseUniPlaySong ?? true;
-
-                DebugLog(
-                    $"[AnikiHelper][Splash][UPS] " +
-                    $"PauseUniPlaySong={pauseUps}, " +
-                    $"Game='{game.Name}'"
-                );
-
-                if (pauseUps)
-                {
-                    HoldUniPlaySongGameStartingPause(game.Id);
-                    DebugLog($"[AnikiHelper][Splash][UPS] Hold pause requested. Game='{game.Name}' Id={game.Id}");
-                }
-
-                var bgPath = GetBestGameLaunchSplashBackground(game);
-                var fallbackBackgroundPath = GetPlayniteGameBackground(game);
-
-                DebugLog(
-                    $"[AnikiHelper][Splash][Background] " +
-                    $"Game='{game.Name}', " +
-                    $"Selected='{(string.IsNullOrEmpty(bgPath) ? "NULL" : bgPath)}', " +
-                    $"Fallback='{(string.IsNullOrEmpty(fallbackBackgroundPath) ? "NULL" : fallbackBackgroundPath)}'"
-                );
-
-                var showLogo = Settings?.GameLaunchSplashShowLogo ?? true;
-                var logoPosition = Settings?.GameLaunchSplashLogoPosition ?? SplashScreenLogoPosition.LeftCenter;
-                var videoSoundEnabled = Settings?.GameLaunchSplashVideoSoundEnabled ?? false;
-                var videoEndBehavior = Settings?.GameLaunchSplashVideoEndBehavior ?? SplashScreenVideoEndBehavior.ShowGameBackground;
-                var videoVolume = Settings?.GameLaunchSplashVideoVolume ?? 0.5;
-                var backgroundDimming = Settings?.GameLaunchSplashBackgroundDimming ?? AnikiHelperSettings.DefaultGameLaunchSplashBackgroundDimming;
-
-                DebugLog(
-                    $"[AnikiHelper][Splash][Settings] " +
-                    $"ShowLogo={showLogo}, " +
-                    $"LogoPosition={logoPosition}, " +
-                    $"VideoSound={videoSoundEnabled}, " +
-                    $"VideoEndBehavior={videoEndBehavior}, " +
-                    $"VideoVolume={videoVolume}, " +
-                    $"BackgroundDimming={backgroundDimming:P0}"
-                );
-
-                splashScreenRuntimeService.Show(
-                    game,
-                    bgPath,
-                    fallbackBackgroundPath,
-                    showLogo,
-                    logoPosition,
-                    videoSoundEnabled,
-                    videoEndBehavior,
-                    videoVolume,
-                    backgroundDimming);
-
-                DebugLog($"[AnikiHelper][Splash][RESULT] Show requested. Game='{game.Name}'");
-
-                var minimumDuration = Settings?.GameLaunchSplashMinimumDurationMs ?? GameLaunchSplashMinimumDurationMs;
-                var defaultDuration = minimumDuration;
-                var hasCustomDuration = false;
-
-                if (Settings?.CustomGameLaunchSplashMinimumDurations != null &&
-                    Settings.CustomGameLaunchSplashMinimumDurations.TryGetValue(game.Id, out var customDuration))
-                {
-                    minimumDuration = customDuration;
-                    hasCustomDuration = true;
-                }
-
-                // Before Playnite reports GameStarted, use a short launch-failure safety.
-                // The 90s hard safety remains reserved for Game Ready detection after GameStarted.
-                var launchFailureSafetyDuration = GameLaunchSplashLaunchFailureSafetyMs;
-
-                DebugLog(
-                    $"[AnikiHelper][Splash][Timer] " +
-                    $"Game='{game.Name}', " +
-                    $"Default={defaultDuration}, " +
-                    $"HasCustom={hasCustomDuration}, " +
-                    $"Final={minimumDuration}, " +
-                    $"AutoDetectReady=True, " +
-                    $"HardSafety={GameLaunchSplashHardSafetyMs}, " +
-                    $"LaunchFailureSafety={launchFailureSafetyDuration}"
-                );
-
-                CaptureGameReadyLaunchBaseline(game);
-
-                splashScreenRuntimeService.StartLaunchFailureSafety(launchFailureSafetyDuration);
-                DebugLog($"[AnikiHelper][Splash][Safety] Launch failure safety started. Duration={launchFailureSafetyDuration}ms");
-
-                StartUniPlaySongLaunchFailureRelease(game.Id, launchFailureSafetyDuration);
-                DebugLog($"[AnikiHelper][Splash][UPS] Launch failure release scheduled. Duration={launchFailureSafetyDuration}ms");
+                TryShowGameLaunchSplash(game, startLaunchFailureSafety: true);
 
                 DebugLog($"[AnikiHelper][GameStarting][END] Game='{game.Name}'");
             }
             catch (Exception ex)
             {
                 logger.Warn(ex, $"[AnikiHelper][GameStarting][ERROR] Failed while starting game splash. Game='{args?.Game?.Name ?? "NULL"}'");
+            }
+        }
+
+        // Shared by OnGameStarting (native/installed games, where Playnite itself
+        // reports the launch) and ShowExternalGameLaunchSplash (games another plugin
+        // launches itself, outside Playnite's StartGame() pipeline — e.g. NAS
+        // Connector's "Play from NAS", which has no OnGameStarting to hook at all).
+        // Same feature, same settings, same gating either way.
+        private bool TryShowGameLaunchSplash(Game game, bool startLaunchFailureSafety)
+        {
+            var splashEnabled = Settings?.GameLaunchSplashEnabled ?? false;
+            var isFullscreen = PlayniteApi?.ApplicationInfo?.Mode == ApplicationMode.Fullscreen;
+            var isAnikiTheme = IsAnikiThemeActive();
+
+            DebugLog(
+                $"[AnikiHelper][GameStarting][State] " +
+                $"Game='{game.Name}', " +
+                $"Fullscreen={isFullscreen}, " +
+                $"AnikiTheme={isAnikiTheme}, " +
+                $"SplashEnabled={splashEnabled}"
+            );
+
+            if (!splashEnabled)
+            {
+                DebugLog($"[AnikiHelper][GameStarting][STOP] Splash disabled in settings. Game='{game.Name}'");
+                return false;
+            }
+
+            if (!isFullscreen)
+            {
+                DebugLog($"[AnikiHelper][GameStarting][STOP] Playnite is not in Fullscreen mode. Game='{game.Name}'");
+                return false;
+            }
+
+            if (!isAnikiTheme)
+            {
+                DebugLog($"[AnikiHelper][GameStarting][STOP] Aniki theme is not active. Game='{game.Name}'");
+                return false;
+            }
+
+            splashScreenRuntimeService?.Close();
+            ReleaseUniPlaySongGameStartingPause(game.Id);
+            var pauseUps = Settings?.GameLaunchSplashPauseUniPlaySong ?? true;
+
+            DebugLog(
+                $"[AnikiHelper][Splash][UPS] " +
+                $"PauseUniPlaySong={pauseUps}, " +
+                $"Game='{game.Name}'"
+            );
+
+            if (pauseUps)
+            {
+                HoldUniPlaySongGameStartingPause(game.Id);
+                DebugLog($"[AnikiHelper][Splash][UPS] Hold pause requested. Game='{game.Name}' Id={game.Id}");
+            }
+
+            var bgPath = GetBestGameLaunchSplashBackground(game);
+            var fallbackBackgroundPath = GetPlayniteGameBackground(game);
+
+            DebugLog(
+                $"[AnikiHelper][Splash][Background] " +
+                $"Game='{game.Name}', " +
+                $"Selected='{(string.IsNullOrEmpty(bgPath) ? "NULL" : bgPath)}', " +
+                $"Fallback='{(string.IsNullOrEmpty(fallbackBackgroundPath) ? "NULL" : fallbackBackgroundPath)}'"
+            );
+
+            var showLogo = Settings?.GameLaunchSplashShowLogo ?? true;
+            var logoPosition = Settings?.GameLaunchSplashLogoPosition ?? SplashScreenLogoPosition.LeftCenter;
+            var videoSoundEnabled = Settings?.GameLaunchSplashVideoSoundEnabled ?? false;
+            var videoEndBehavior = Settings?.GameLaunchSplashVideoEndBehavior ?? SplashScreenVideoEndBehavior.ShowGameBackground;
+            var videoVolume = Settings?.GameLaunchSplashVideoVolume ?? 0.5;
+            var backgroundDimming = Settings?.GameLaunchSplashBackgroundDimming ?? AnikiHelperSettings.DefaultGameLaunchSplashBackgroundDimming;
+
+            DebugLog(
+                $"[AnikiHelper][Splash][Settings] " +
+                $"ShowLogo={showLogo}, " +
+                $"LogoPosition={logoPosition}, " +
+                $"VideoSound={videoSoundEnabled}, " +
+                $"VideoEndBehavior={videoEndBehavior}, " +
+                $"VideoVolume={videoVolume}, " +
+                $"BackgroundDimming={backgroundDimming:P0}"
+            );
+
+            splashScreenRuntimeService.Show(
+                game,
+                bgPath,
+                fallbackBackgroundPath,
+                showLogo,
+                logoPosition,
+                videoSoundEnabled,
+                videoEndBehavior,
+                videoVolume,
+                backgroundDimming);
+
+            DebugLog($"[AnikiHelper][Splash][RESULT] Show requested. Game='{game.Name}'");
+
+            if (!startLaunchFailureSafety)
+                return true;
+
+            var minimumDuration = Settings?.GameLaunchSplashMinimumDurationMs ?? GameLaunchSplashMinimumDurationMs;
+            var defaultDuration = minimumDuration;
+            var hasCustomDuration = false;
+
+            if (Settings?.CustomGameLaunchSplashMinimumDurations != null &&
+                Settings.CustomGameLaunchSplashMinimumDurations.TryGetValue(game.Id, out var customDuration))
+            {
+                minimumDuration = customDuration;
+                hasCustomDuration = true;
+            }
+
+            // Before Playnite reports GameStarted, use a short launch-failure safety.
+            // The 90s hard safety remains reserved for Game Ready detection after GameStarted.
+            var launchFailureSafetyDuration = GameLaunchSplashLaunchFailureSafetyMs;
+
+            DebugLog(
+                $"[AnikiHelper][Splash][Timer] " +
+                $"Game='{game.Name}', " +
+                $"Default={defaultDuration}, " +
+                $"HasCustom={hasCustomDuration}, " +
+                $"Final={minimumDuration}, " +
+                $"AutoDetectReady=True, " +
+                $"HardSafety={GameLaunchSplashHardSafetyMs}, " +
+                $"LaunchFailureSafety={launchFailureSafetyDuration}"
+            );
+
+            CaptureGameReadyLaunchBaseline(game);
+
+            splashScreenRuntimeService.StartLaunchFailureSafety(launchFailureSafetyDuration);
+            DebugLog($"[AnikiHelper][Splash][Safety] Launch failure safety started. Duration={launchFailureSafetyDuration}ms");
+
+            StartUniPlaySongLaunchFailureRelease(game.Id, launchFailureSafetyDuration);
+            DebugLog($"[AnikiHelper][Splash][UPS] Launch failure release scheduled. Duration={launchFailureSafetyDuration}ms");
+
+            return true;
+        }
+
+        // Public integration point for plugins that launch a game process themselves,
+        // outside Playnite's own StartGame() pipeline — NAS Connector's "Play from
+        // NAS" being the motivating case, which has no OnGameStarting/OnGameStarted
+        // to hook at all. Looked up via PlayniteApi.Addons.Plugins and called through
+        // reflection by the caller (see NAS Connector's PlayFromNas), so this needs no
+        // compile-time reference in either direction and simply isn't called if
+        // AnikiHelper isn't installed. Reuses the exact same feature/settings as
+        // native launches — no launch-failure safety timer here, since the caller
+        // already knows definitively whether ITS OWN process started or failed.
+        public bool ShowExternalGameLaunchSplash(Game game)
+        {
+            if (game == null)
+                return false;
+
+            try
+            {
+                return TryShowGameLaunchSplash(game, startLaunchFailureSafety: false);
+            }
+            catch (Exception ex)
+            {
+                logger.Warn(ex, $"[AnikiHelper][ExternalSplash][ERROR] Failed to show. Game='{game.Name}'");
+                return false;
+            }
+        }
+
+        // Closes a splash shown via ShowExternalGameLaunchSplash, respecting the same
+        // configured minimum-display duration as the native path (so it can't flash
+        // for a few milliseconds if the caller's game window appears instantly).
+        public void CloseExternalGameLaunchSplash()
+        {
+            try
+            {
+                var minimumDuration = Settings?.GameLaunchSplashMinimumDurationMs ?? GameLaunchSplashMinimumDurationMs;
+                _ = splashScreenRuntimeService?.CloseAfterFixedDurationAsync(minimumDuration);
+            }
+            catch (Exception ex)
+            {
+                logger.Warn(ex, "[AnikiHelper][ExternalSplash][ERROR] Failed to close.");
             }
         }
 
