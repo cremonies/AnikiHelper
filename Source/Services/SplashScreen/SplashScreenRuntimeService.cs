@@ -340,6 +340,33 @@ namespace AnikiHelper.Services.SplashScreen
             Close();
         }
 
+        // For the closing-transition splash. NOT the inverse of
+        // CloseAfterMinimumAndFocusLossAsync above — polling "is Playnite foreground
+        // yet" while THIS splash is itself still open and Topmost doesn't work
+        // reliably: activating Playnite races against our own window in the same
+        // process, and can time out without Playnite ever actually winning focus.
+        // Simpler and correct instead: close on a fixed timer (no polling), then hand
+        // the caller a clean signal to activate Playnite themselves — guaranteed to
+        // happen only once nothing of ours is competing for foreground anymore.
+        public async Task CloseAfterFixedDurationThenAsync(int durationMs, Action afterClosed)
+        {
+            try
+            {
+                await CloseAfterFixedDurationAsync(durationMs);
+            }
+            finally
+            {
+                try
+                {
+                    afterClosed?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    logger.Warn(ex, "[AnikiHelper] Closing-splash afterClosed callback failed.");
+                }
+            }
+        }
+
         public void Close()
         {
             try
