@@ -145,7 +145,6 @@
     <Compile Include="Services\Audio\EventSoundService.cs" />
     <Compile Include="Services\UI\FastScrollViewerBehavior.cs" />
     <Compile Include="Services\UI\FilterBackgroundService.cs" />
-    <Compile Include="Services\UI\NativePlaySessionOverlay.cs" />
     <Compile Include="Services\UI\ImageMemoryCache.cs" />
     <Compile Include="Services\Video\FullscreenShutdownVideoHook.cs" />
     <Compile Include="Services\MediaGallery\AnikiMediaGameItem.cs" />

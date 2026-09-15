@@ -259,19 +259,6 @@ namespace AnikiHelper
         private readonly EventSoundService eventSoundService;
         private readonly AnikiWindowManager anikiWindowManager;
         private readonly InGameOverlayService inGameOverlayService;
-
-        // A real, separate blocking "Now Playing" window for the FULL duration of a
-        // Fullscreen-mode game session — distinct from inGameOverlayService (a
-        // hotkey-summoned in-game quick-access overlay) and from the post-launch
-        // focus watchdog above (which only guards the first few seconds while a
-        // launcher's real window is still appearing). This instead guards the entire
-        // session: if Playnite's own window becomes foreground again at any point
-        // while a game is running — Alt+Tab, the taskbar, the Windows/Xbox Guide
-        // button — this takes over instead of leaving Playnite's normal, fully
-        // navigable game list reachable underneath. Keyed by game Id in case Playnite
-        // ever reports more than one game running at once.
-        private readonly Dictionary<Guid, NativePlaySessionOverlay> nativePlaySessionOverlays =
-            new Dictionary<Guid, NativePlaySessionOverlay>();
         private readonly AnikiWebBrowserService webBrowserService;
         private readonly AnikiVideoPlayerService videoPlayerService;
         private Window videoLibraryManagerWindow;
@@ -23962,293 +23949,131 @@ namespace AnikiHelper
                     return;
                 }
 
-                TryShowGameLaunchSplash(game, startLaunchFailureSafety: true);
+                var splashEnabled = Settings?.GameLaunchSplashEnabled ?? false;
+                var isFullscreen = PlayniteApi?.ApplicationInfo?.Mode == ApplicationMode.Fullscreen;
+                var isAnikiTheme = IsAnikiThemeActive();
+
+                DebugLog(
+                    $"[AnikiHelper][GameStarting][State] " +
+                    $"Game='{game.Name}', " +
+                    $"Fullscreen={isFullscreen}, " +
+                    $"AnikiTheme={isAnikiTheme}, " +
+                    $"SplashEnabled={splashEnabled}"
+                );
+
+                if (!splashEnabled)
+                {
+                    DebugLog($"[AnikiHelper][GameStarting][STOP] Splash disabled in settings. Game='{game.Name}'");
+                    return;
+                }
+
+                if (!isFullscreen)
+                {
+                    DebugLog($"[AnikiHelper][GameStarting][STOP] Playnite is not in Fullscreen mode. Game='{game.Name}'");
+                    return;
+                }
+
+                if (!isAnikiTheme)
+                {
+                    DebugLog($"[AnikiHelper][GameStarting][STOP] Aniki theme is not active. Game='{game.Name}'");
+                    return;
+                }
+
+                splashScreenRuntimeService?.Close();
+                ReleaseUniPlaySongGameStartingPause(game.Id);
+                var pauseUps = Settings?.GameLaunchSplashPauseUniPlaySong ?? true;
+
+                DebugLog(
+                    $"[AnikiHelper][Splash][UPS] " +
+                    $"PauseUniPlaySong={pauseUps}, " +
+                    $"Game='{game.Name}'"
+                );
+
+                if (pauseUps)
+                {
+                    HoldUniPlaySongGameStartingPause(game.Id);
+                    DebugLog($"[AnikiHelper][Splash][UPS] Hold pause requested. Game='{game.Name}' Id={game.Id}");
+                }
+
+                var bgPath = GetBestGameLaunchSplashBackground(game);
+                var fallbackBackgroundPath = GetPlayniteGameBackground(game);
+
+                DebugLog(
+                    $"[AnikiHelper][Splash][Background] " +
+                    $"Game='{game.Name}', " +
+                    $"Selected='{(string.IsNullOrEmpty(bgPath) ? "NULL" : bgPath)}', " +
+                    $"Fallback='{(string.IsNullOrEmpty(fallbackBackgroundPath) ? "NULL" : fallbackBackgroundPath)}'"
+                );
+
+                var showLogo = Settings?.GameLaunchSplashShowLogo ?? true;
+                var logoPosition = Settings?.GameLaunchSplashLogoPosition ?? SplashScreenLogoPosition.LeftCenter;
+                var videoSoundEnabled = Settings?.GameLaunchSplashVideoSoundEnabled ?? false;
+                var videoEndBehavior = Settings?.GameLaunchSplashVideoEndBehavior ?? SplashScreenVideoEndBehavior.ShowGameBackground;
+                var videoVolume = Settings?.GameLaunchSplashVideoVolume ?? 0.5;
+                var backgroundDimming = Settings?.GameLaunchSplashBackgroundDimming ?? AnikiHelperSettings.DefaultGameLaunchSplashBackgroundDimming;
+
+                DebugLog(
+                    $"[AnikiHelper][Splash][Settings] " +
+                    $"ShowLogo={showLogo}, " +
+                    $"LogoPosition={logoPosition}, " +
+                    $"VideoSound={videoSoundEnabled}, " +
+                    $"VideoEndBehavior={videoEndBehavior}, " +
+                    $"VideoVolume={videoVolume}, " +
+                    $"BackgroundDimming={backgroundDimming:P0}"
+                );
+
+                splashScreenRuntimeService.Show(
+                    game,
+                    bgPath,
+                    fallbackBackgroundPath,
+                    showLogo,
+                    logoPosition,
+                    videoSoundEnabled,
+                    videoEndBehavior,
+                    videoVolume,
+                    backgroundDimming);
+
+                DebugLog($"[AnikiHelper][Splash][RESULT] Show requested. Game='{game.Name}'");
+
+                var minimumDuration = Settings?.GameLaunchSplashMinimumDurationMs ?? GameLaunchSplashMinimumDurationMs;
+                var defaultDuration = minimumDuration;
+                var hasCustomDuration = false;
+
+                if (Settings?.CustomGameLaunchSplashMinimumDurations != null &&
+                    Settings.CustomGameLaunchSplashMinimumDurations.TryGetValue(game.Id, out var customDuration))
+                {
+                    minimumDuration = customDuration;
+                    hasCustomDuration = true;
+                }
+
+                // Before Playnite reports GameStarted, use a short launch-failure safety.
+                // The 90s hard safety remains reserved for Game Ready detection after GameStarted.
+                var launchFailureSafetyDuration = GameLaunchSplashLaunchFailureSafetyMs;
+
+                DebugLog(
+                    $"[AnikiHelper][Splash][Timer] " +
+                    $"Game='{game.Name}', " +
+                    $"Default={defaultDuration}, " +
+                    $"HasCustom={hasCustomDuration}, " +
+                    $"Final={minimumDuration}, " +
+                    $"AutoDetectReady=True, " +
+                    $"HardSafety={GameLaunchSplashHardSafetyMs}, " +
+                    $"LaunchFailureSafety={launchFailureSafetyDuration}"
+                );
+
+                CaptureGameReadyLaunchBaseline(game);
+
+                splashScreenRuntimeService.StartLaunchFailureSafety(launchFailureSafetyDuration);
+                DebugLog($"[AnikiHelper][Splash][Safety] Launch failure safety started. Duration={launchFailureSafetyDuration}ms");
+
+                StartUniPlaySongLaunchFailureRelease(game.Id, launchFailureSafetyDuration);
+                DebugLog($"[AnikiHelper][Splash][UPS] Launch failure release scheduled. Duration={launchFailureSafetyDuration}ms");
 
                 DebugLog($"[AnikiHelper][GameStarting][END] Game='{game.Name}'");
             }
             catch (Exception ex)
             {
                 logger.Warn(ex, $"[AnikiHelper][GameStarting][ERROR] Failed while starting game splash. Game='{args?.Game?.Name ?? "NULL"}'");
-            }
-        }
-
-        // Shared by OnGameStarting (native/installed games, where Playnite itself
-        // reports the launch) and ShowExternalGameLaunchSplash (games another plugin
-        // launches itself, outside Playnite's StartGame() pipeline — e.g. NAS
-        // Connector's "Play from NAS", which has no OnGameStarting to hook at all).
-        // Same feature, same settings, same gating either way.
-        private bool TryShowGameLaunchSplash(Game game, bool startLaunchFailureSafety)
-        {
-            var splashEnabled = Settings?.GameLaunchSplashEnabled ?? false;
-            var isFullscreen = PlayniteApi?.ApplicationInfo?.Mode == ApplicationMode.Fullscreen;
-            var isAnikiTheme = IsAnikiThemeActive();
-
-            DebugLog(
-                $"[AnikiHelper][GameStarting][State] " +
-                $"Game='{game.Name}', " +
-                $"Fullscreen={isFullscreen}, " +
-                $"AnikiTheme={isAnikiTheme}, " +
-                $"SplashEnabled={splashEnabled}"
-            );
-
-            if (!splashEnabled)
-            {
-                DebugLog($"[AnikiHelper][GameStarting][STOP] Splash disabled in settings. Game='{game.Name}'");
-                return false;
-            }
-
-            if (!isFullscreen)
-            {
-                DebugLog($"[AnikiHelper][GameStarting][STOP] Playnite is not in Fullscreen mode. Game='{game.Name}'");
-                return false;
-            }
-
-            if (!isAnikiTheme)
-            {
-                DebugLog($"[AnikiHelper][GameStarting][STOP] Aniki theme is not active. Game='{game.Name}'");
-                return false;
-            }
-
-            splashScreenRuntimeService?.Close();
-            ReleaseUniPlaySongGameStartingPause(game.Id);
-            var pauseUps = Settings?.GameLaunchSplashPauseUniPlaySong ?? true;
-
-            DebugLog(
-                $"[AnikiHelper][Splash][UPS] " +
-                $"PauseUniPlaySong={pauseUps}, " +
-                $"Game='{game.Name}'"
-            );
-
-            if (pauseUps)
-            {
-                HoldUniPlaySongGameStartingPause(game.Id);
-                DebugLog($"[AnikiHelper][Splash][UPS] Hold pause requested. Game='{game.Name}' Id={game.Id}");
-            }
-
-            var bgPath = GetBestGameLaunchSplashBackground(game);
-            var fallbackBackgroundPath = GetPlayniteGameBackground(game);
-
-            DebugLog(
-                $"[AnikiHelper][Splash][Background] " +
-                $"Game='{game.Name}', " +
-                $"Selected='{(string.IsNullOrEmpty(bgPath) ? "NULL" : bgPath)}', " +
-                $"Fallback='{(string.IsNullOrEmpty(fallbackBackgroundPath) ? "NULL" : fallbackBackgroundPath)}'"
-            );
-
-            var showLogo = Settings?.GameLaunchSplashShowLogo ?? true;
-            var logoPosition = Settings?.GameLaunchSplashLogoPosition ?? SplashScreenLogoPosition.LeftCenter;
-            var videoSoundEnabled = Settings?.GameLaunchSplashVideoSoundEnabled ?? false;
-            var videoEndBehavior = Settings?.GameLaunchSplashVideoEndBehavior ?? SplashScreenVideoEndBehavior.ShowGameBackground;
-            var videoVolume = Settings?.GameLaunchSplashVideoVolume ?? 0.5;
-            var backgroundDimming = Settings?.GameLaunchSplashBackgroundDimming ?? AnikiHelperSettings.DefaultGameLaunchSplashBackgroundDimming;
-
-            DebugLog(
-                $"[AnikiHelper][Splash][Settings] " +
-                $"ShowLogo={showLogo}, " +
-                $"LogoPosition={logoPosition}, " +
-                $"VideoSound={videoSoundEnabled}, " +
-                $"VideoEndBehavior={videoEndBehavior}, " +
-                $"VideoVolume={videoVolume}, " +
-                $"BackgroundDimming={backgroundDimming:P0}"
-            );
-
-            splashScreenRuntimeService.Show(
-                game,
-                bgPath,
-                fallbackBackgroundPath,
-                showLogo,
-                logoPosition,
-                videoSoundEnabled,
-                videoEndBehavior,
-                videoVolume,
-                backgroundDimming);
-
-            DebugLog($"[AnikiHelper][Splash][RESULT] Show requested. Game='{game.Name}'");
-
-            if (!startLaunchFailureSafety)
-                return true;
-
-            var minimumDuration = Settings?.GameLaunchSplashMinimumDurationMs ?? GameLaunchSplashMinimumDurationMs;
-            var defaultDuration = minimumDuration;
-            var hasCustomDuration = false;
-
-            if (Settings?.CustomGameLaunchSplashMinimumDurations != null &&
-                Settings.CustomGameLaunchSplashMinimumDurations.TryGetValue(game.Id, out var customDuration))
-            {
-                minimumDuration = customDuration;
-                hasCustomDuration = true;
-            }
-
-            // Before Playnite reports GameStarted, use a short launch-failure safety.
-            // The 90s hard safety remains reserved for Game Ready detection after GameStarted.
-            var launchFailureSafetyDuration = GameLaunchSplashLaunchFailureSafetyMs;
-
-            DebugLog(
-                $"[AnikiHelper][Splash][Timer] " +
-                $"Game='{game.Name}', " +
-                $"Default={defaultDuration}, " +
-                $"HasCustom={hasCustomDuration}, " +
-                $"Final={minimumDuration}, " +
-                $"AutoDetectReady=True, " +
-                $"HardSafety={GameLaunchSplashHardSafetyMs}, " +
-                $"LaunchFailureSafety={launchFailureSafetyDuration}"
-            );
-
-            CaptureGameReadyLaunchBaseline(game);
-
-            splashScreenRuntimeService.StartLaunchFailureSafety(launchFailureSafetyDuration);
-            DebugLog($"[AnikiHelper][Splash][Safety] Launch failure safety started. Duration={launchFailureSafetyDuration}ms");
-
-            StartUniPlaySongLaunchFailureRelease(game.Id, launchFailureSafetyDuration);
-            DebugLog($"[AnikiHelper][Splash][UPS] Launch failure release scheduled. Duration={launchFailureSafetyDuration}ms");
-
-            return true;
-        }
-
-        // Public integration point for plugins that launch a game process themselves,
-        // outside Playnite's own StartGame() pipeline — NAS Connector's "Play from
-        // NAS" being the motivating case, which has no OnGameStarting/OnGameStarted
-        // to hook at all. Looked up via PlayniteApi.Addons.Plugins and called through
-        // reflection by the caller (see NAS Connector's PlayFromNas), so this needs no
-        // compile-time reference in either direction and simply isn't called if
-        // AnikiHelper isn't installed. Reuses the exact same feature/settings as
-        // native launches — no launch-failure safety timer here, since the caller
-        // already knows definitively whether ITS OWN process started or failed.
-        public bool ShowExternalGameLaunchSplash(Game game)
-        {
-            if (game == null)
-                return false;
-
-            try
-            {
-                return TryShowGameLaunchSplash(game, startLaunchFailureSafety: false);
-            }
-            catch (Exception ex)
-            {
-                logger.Warn(ex, $"[AnikiHelper][ExternalSplash][ERROR] Failed to show. Game='{game.Name}'");
-                return false;
-            }
-        }
-
-        // Closes a splash shown via ShowExternalGameLaunchSplash, respecting the same
-        // configured minimum-display duration as the native path (so it can't flash
-        // for a few milliseconds if the caller's game window appears instantly).
-        public void CloseExternalGameLaunchSplash()
-        {
-            try
-            {
-                var minimumDuration = Settings?.GameLaunchSplashMinimumDurationMs ?? GameLaunchSplashMinimumDurationMs;
-                _ = splashScreenRuntimeService?.CloseAfterFixedDurationAsync(minimumDuration);
-            }
-            catch (Exception ex)
-            {
-                logger.Warn(ex, "[AnikiHelper][ExternalSplash][ERROR] Failed to close.");
-            }
-        }
-
-        // The other end of the same idea, RetroBat-style: a cover shown the instant a
-        // game closes, so the transition back to Playnite's own UI (whatever that
-        // restore looks like mid-flight) happens underneath it instead of in plain
-        // view. Same gating and visuals as the launch splash (shares the setting —
-        // there's deliberately no separate toggle for this), but closes itself once
-        // Playnite's window is confirmed foreground again rather than once a game
-        // window appears, so it needs no external "ready" signal from the caller at
-        // all — unlike ShowExternalGameLaunchSplash, nothing else needs to call a
-        // "close" method afterward.
-        private bool TryShowGameClosingSplash(Game game)
-        {
-            if (game == null)
-                return false;
-
-            var splashEnabled = Settings?.GameLaunchSplashEnabled ?? false;
-            var isFullscreen = PlayniteApi?.ApplicationInfo?.Mode == ApplicationMode.Fullscreen;
-            var isAnikiTheme = IsAnikiThemeActive();
-
-            if (!splashEnabled || !isFullscreen || !isAnikiTheme)
-            {
-                DebugLog(
-                    $"[AnikiHelper][ClosingSplash][SKIP] " +
-                    $"Game='{game.Name}', SplashEnabled={splashEnabled}, Fullscreen={isFullscreen}, AnikiTheme={isAnikiTheme}");
-                return false;
-            }
-
-            var bgPath = GetBestGameLaunchSplashBackground(game);
-            var fallbackBackgroundPath = GetPlayniteGameBackground(game);
-            var showLogo = Settings?.GameLaunchSplashShowLogo ?? true;
-            var logoPosition = Settings?.GameLaunchSplashLogoPosition ?? SplashScreenLogoPosition.LeftCenter;
-            var videoSoundEnabled = Settings?.GameLaunchSplashVideoSoundEnabled ?? false;
-            var videoEndBehavior = Settings?.GameLaunchSplashVideoEndBehavior ?? SplashScreenVideoEndBehavior.ShowGameBackground;
-            var videoVolume = Settings?.GameLaunchSplashVideoVolume ?? 0.5;
-            var backgroundDimming = Settings?.GameLaunchSplashBackgroundDimming ?? AnikiHelperSettings.DefaultGameLaunchSplashBackgroundDimming;
-
-            splashScreenRuntimeService.Show(
-                game,
-                bgPath,
-                fallbackBackgroundPath,
-                showLogo,
-                logoPosition,
-                videoSoundEnabled,
-                videoEndBehavior,
-                videoVolume,
-                backgroundDimming);
-
-            DebugLog($"[AnikiHelper][ClosingSplash][RESULT] Show requested. Game='{game.Name}'");
-
-            var minimumDuration = Settings?.GameLaunchSplashMinimumDurationMs ?? GameLaunchSplashMinimumDurationMs;
-            if (Settings?.CustomGameLaunchSplashMinimumDurations != null &&
-                Settings.CustomGameLaunchSplashMinimumDurations.TryGetValue(game.Id, out var customDuration))
-            {
-                minimumDuration = customDuration;
-            }
-
-            _ = splashScreenRuntimeService.CloseAfterFixedDurationThenAsync(minimumDuration, ReactivatePlayniteWindow);
-
-            return true;
-        }
-
-        // Runs only after the closing splash has actually closed — nothing of ours
-        // is left competing for foreground at that point, so this reliably wins.
-        private void ReactivatePlayniteWindow()
-        {
-            try
-            {
-                var window = System.Windows.Application.Current?.MainWindow;
-                if (window == null)
-                    return;
-
-                void DoActivate()
-                {
-                    if (window.WindowState == System.Windows.WindowState.Minimized)
-                        window.WindowState = System.Windows.WindowState.Normal;
-                    window.Activate();
-                }
-
-                if (window.Dispatcher.CheckAccess())
-                    DoActivate();
-                else
-                    window.Dispatcher.Invoke(DoActivate);
-            }
-            catch (Exception ex)
-            {
-                logger.Warn(ex, "[AnikiHelper][ClosingSplash] Failed to reactivate Playnite after close.");
-            }
-        }
-
-        // Public integration point mirroring ShowExternalGameLaunchSplash, for the
-        // same external-launch callers (NAS Connector's PlayFromNas) to cover the
-        // closing transition too. Call this once when your own tracked process exits
-        // — it closes itself automatically once Playnite's window is foreground
-        // again, so there's no matching "close" call needed afterward.
-        public bool ShowExternalGameClosingSplash(Game game)
-        {
-            try
-            {
-                return TryShowGameClosingSplash(game);
-            }
-            catch (Exception ex)
-            {
-                logger.Warn(ex, $"[AnikiHelper][ExternalClosingSplash][ERROR] Failed to show. Game='{game?.Name ?? "NULL"}'");
-                return false;
             }
         }
 
@@ -26209,29 +26034,6 @@ namespace AnikiHelper
             }
         }
 
-        // Force-closes a game tracked by NativePlaySessionOverlay. Confirmation dialog
-        // first since this kills the process outright — same pattern NAS Connector
-        // uses for its own "Play from NAS" sessions.
-        private void StopNativePlaySession(Guid gameId, Process process)
-        {
-            try
-            {
-                var confirmed = PlayniteApi.Dialogs.ShowMessage(
-                    "Force close this game? Any unsaved progress will be lost.",
-                    "Aniki Helper",
-                    System.Windows.MessageBoxButton.YesNo) == System.Windows.MessageBoxResult.Yes;
-                if (!confirmed)
-                    return;
-
-                if (!process.HasExited)
-                    process.Kill();
-            }
-            catch (Exception ex)
-            {
-                logger.Error(ex, $"[AnikiHelper][PlaySessionOverlay][StopFailed] GameId={gameId}");
-            }
-        }
-
         public override void OnGameStarted(OnGameStartedEventArgs args)
         {
             var swTotal = Stopwatch.StartNew();
@@ -26293,38 +26095,6 @@ namespace AnikiHelper
                         $"Reason={(isFullscreen ? "ThemeNotActive" : "NotFullscreen")}, " +
                         $"Game='{g?.Name ?? "NULL"}'"
                     );
-                }
-
-                // Independent of the theme — this just minimizes Playnite's own window
-                // and, if it comes back to the foreground while the game is still
-                // running, shows a blocking screen instead. Only makes sense in
-                // Fullscreen mode (Desktop mode users expect to keep using Playnite
-                // alongside a running game).
-                if (isFullscreen && g != null && (args?.StartedProcessId ?? 0) > 0)
-                {
-                    try
-                    {
-                        var nativeProcess = Process.GetProcessById(args.StartedProcessId);
-                        if (nativePlaySessionOverlays.TryGetValue(g.Id, out var stalePlaySession))
-                        {
-                            stalePlaySession.Dispose();
-                            nativePlaySessionOverlays.Remove(g.Id);
-                        }
-
-                        var capturedGameId = g.Id;
-                        nativePlaySessionOverlays[g.Id] = new NativePlaySessionOverlay(
-                            nativeProcess,
-                            g.Name,
-                            () => StopNativePlaySession(capturedGameId, nativeProcess));
-
-                        DebugLog($"[AnikiHelper][PlaySessionOverlay][Created] Game='{g.Name}', PID={args.StartedProcessId}");
-                    }
-                    catch (Exception ex)
-                    {
-                        // The process may have already exited (very short-lived
-                        // launcher hand-off) — nothing to guard in that case.
-                        DebugLog($"[AnikiHelper][PlaySessionOverlay][Skip] Game='{g.Name}', PID={args?.StartedProcessId}, Reason={ex.Message}");
-                    }
                 }
 
                 var shouldRunSplashGameReady =
@@ -26484,25 +26254,11 @@ namespace AnikiHelper
                 var g = args?.Game;
                 ClearGameReadyLaunchBaseline(g?.Id);
 
-                // Shown BEFORE the play-session overlay below disposes itself (which
-                // is what actually restores/activates Playnite's window) — so that
-                // restore, and whatever it looks like mid-transition, happens hidden
-                // underneath this cover rather than as a visible flash. Show(...)
-                // internally closes any splash already up first, which also covers
-                // the defensive "a launch splash was somehow still lingering" cleanup
-                // this used to need a separate Close() call for.
-                if (g != null)
-                    TryShowGameClosingSplash(g);
-
-                if (g != null && nativePlaySessionOverlays.TryGetValue(g.Id, out var endedPlaySession))
-                {
-                    endedPlaySession.Dispose();
-                    nativePlaySessionOverlays.Remove(g.Id);
-                    DebugLog($"[AnikiHelper][PlaySessionOverlay][Disposed] Game='{g.Name}'");
-                }
-
                 eventSoundService.PlayGameStopped();
                 DebugLog($"[AnikiHelper][GameStopped][Sound] Game stopped sound requested. Game='{g?.Name ?? "NULL"}'");
+
+                splashScreenRuntimeService.Close();
+                DebugLog($"[AnikiHelper][Splash][Close] Close requested after game stop. Game='{g?.Name ?? "NULL"}'");
 
                 ReleaseUniPlaySongGameStartingPause(g?.Id);
                 DebugLog($"[AnikiHelper][UPS][Release] Game starting pause released. Game='{g?.Name ?? "NULL"}', Id={g?.Id}");
