@@ -24146,112 +24146,6 @@ namespace AnikiHelper
             }
         }
 
-        // The other end of the same idea, RetroBat-style: a cover shown the instant a
-        // game closes, so the transition back to Playnite's own UI (whatever that
-        // restore looks like mid-flight) happens underneath it instead of in plain
-        // view. Same gating and visuals as the launch splash (shares the setting —
-        // there's deliberately no separate toggle for this), but closes itself once
-        // Playnite's window is confirmed foreground again rather than once a game
-        // window appears, so it needs no external "ready" signal from the caller at
-        // all — unlike ShowExternalGameLaunchSplash, nothing else needs to call a
-        // "close" method afterward.
-        private bool TryShowGameClosingSplash(Game game)
-        {
-            if (game == null)
-                return false;
-
-            var splashEnabled = Settings?.GameLaunchSplashEnabled ?? false;
-            var isFullscreen = PlayniteApi?.ApplicationInfo?.Mode == ApplicationMode.Fullscreen;
-            var isAnikiTheme = IsAnikiThemeActive();
-
-            if (!splashEnabled || !isFullscreen || !isAnikiTheme)
-            {
-                DebugLog(
-                    $"[AnikiHelper][ClosingSplash][SKIP] " +
-                    $"Game='{game.Name}', SplashEnabled={splashEnabled}, Fullscreen={isFullscreen}, AnikiTheme={isAnikiTheme}");
-                return false;
-            }
-
-            var bgPath = GetBestGameLaunchSplashBackground(game);
-            var fallbackBackgroundPath = GetPlayniteGameBackground(game);
-            var showLogo = Settings?.GameLaunchSplashShowLogo ?? true;
-            var logoPosition = Settings?.GameLaunchSplashLogoPosition ?? SplashScreenLogoPosition.LeftCenter;
-            var videoSoundEnabled = Settings?.GameLaunchSplashVideoSoundEnabled ?? false;
-            var videoEndBehavior = Settings?.GameLaunchSplashVideoEndBehavior ?? SplashScreenVideoEndBehavior.ShowGameBackground;
-            var videoVolume = Settings?.GameLaunchSplashVideoVolume ?? 0.5;
-            var backgroundDimming = Settings?.GameLaunchSplashBackgroundDimming ?? AnikiHelperSettings.DefaultGameLaunchSplashBackgroundDimming;
-
-            splashScreenRuntimeService.Show(
-                game,
-                bgPath,
-                fallbackBackgroundPath,
-                showLogo,
-                logoPosition,
-                videoSoundEnabled,
-                videoEndBehavior,
-                videoVolume,
-                backgroundDimming);
-
-            DebugLog($"[AnikiHelper][ClosingSplash][RESULT] Show requested. Game='{game.Name}'");
-
-            var minimumDuration = Settings?.GameLaunchSplashMinimumDurationMs ?? GameLaunchSplashMinimumDurationMs;
-            if (Settings?.CustomGameLaunchSplashMinimumDurations != null &&
-                Settings.CustomGameLaunchSplashMinimumDurations.TryGetValue(game.Id, out var customDuration))
-            {
-                minimumDuration = customDuration;
-            }
-
-            _ = splashScreenRuntimeService.CloseAfterFixedDurationThenAsync(minimumDuration, ReactivatePlayniteWindow);
-
-            return true;
-        }
-
-        // Runs only after the closing splash has actually closed — nothing of ours
-        // is left competing for foreground at that point, so this reliably wins.
-        private void ReactivatePlayniteWindow()
-        {
-            try
-            {
-                var window = System.Windows.Application.Current?.MainWindow;
-                if (window == null)
-                    return;
-
-                void DoActivate()
-                {
-                    if (window.WindowState == System.Windows.WindowState.Minimized)
-                        window.WindowState = System.Windows.WindowState.Normal;
-                    window.Activate();
-                }
-
-                if (window.Dispatcher.CheckAccess())
-                    DoActivate();
-                else
-                    window.Dispatcher.Invoke(DoActivate);
-            }
-            catch (Exception ex)
-            {
-                logger.Warn(ex, "[AnikiHelper][ClosingSplash] Failed to reactivate Playnite after close.");
-            }
-        }
-
-        // Public integration point mirroring ShowExternalGameLaunchSplash, for the
-        // same external-launch callers (NAS Connector's PlayFromNas) to cover the
-        // closing transition too. Call this once when your own tracked process exits
-        // — it closes itself automatically once Playnite's window is foreground
-        // again, so there's no matching "close" call needed afterward.
-        public bool ShowExternalGameClosingSplash(Game game)
-        {
-            try
-            {
-                return TryShowGameClosingSplash(game);
-            }
-            catch (Exception ex)
-            {
-                logger.Warn(ex, $"[AnikiHelper][ExternalClosingSplash][ERROR] Failed to show. Game='{game?.Name ?? "NULL"}'");
-                return false;
-            }
-        }
-
         private void DebugLogGameReadyDiagnostic(string key, string message)
         {
             try
@@ -26484,15 +26378,8 @@ namespace AnikiHelper
                 var g = args?.Game;
                 ClearGameReadyLaunchBaseline(g?.Id);
 
-                // Shown BEFORE the play-session overlay below disposes itself (which
-                // is what actually restores/activates Playnite's window) — so that
-                // restore, and whatever it looks like mid-transition, happens hidden
-                // underneath this cover rather than as a visible flash. Show(...)
-                // internally closes any splash already up first, which also covers
-                // the defensive "a launch splash was somehow still lingering" cleanup
-                // this used to need a separate Close() call for.
-                if (g != null)
-                    TryShowGameClosingSplash(g);
+                splashScreenRuntimeService.Close();
+                DebugLog($"[AnikiHelper][Splash][Close] Close requested after game stop. Game='{g?.Name ?? "NULL"}'");
 
                 if (g != null && nativePlaySessionOverlays.TryGetValue(g.Id, out var endedPlaySession))
                 {
