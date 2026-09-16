@@ -248,7 +248,7 @@ namespace AnikiHelper.Services.InGameOverlay
                 var playniteApi = global::AnikiHelper.AnikiHelper.Instance?.PlayniteApi;
                 if (playniteApi != null)
                 {
-                    AnikiHelper.Services.AnikiLazyThemeResources.EnsureStyleLoaded(playniteApi, key);
+                    global::AnikiHelper.Services.AnikiLazyThemeResources.EnsureStyleLoaded(playniteApi, key);
                 }
             }
             catch

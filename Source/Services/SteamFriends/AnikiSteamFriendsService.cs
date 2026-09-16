@@ -1022,7 +1022,7 @@ namespace AnikiHelper.Services.SteamFriends
                 }
 
                 var window = playniteApi.Dialogs.CreateWindow(new WindowCreationOptions { ShowMinimizeButton = false });
-                AnikiHelper.Services.AnikiLazyThemeResources.EnsureStyleLoaded(playniteApi, "FriendsStyleProfil");
+                global::AnikiHelper.Services.AnikiLazyThemeResources.EnsureStyleLoaded(playniteApi, "FriendsStyleProfil");
                 var style = Application.Current.TryFindResource("FriendsStyleProfil") as Style;
                 if (style != null)
                 {
