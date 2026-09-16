@@ -749,6 +749,8 @@ namespace AnikiHelper.Services.ScreenSaver
                 return null;
             }
 
+            global::AnikiHelper.Services.UI.ImageLoadDiagnostics.LogIfThemesOptionAccess(path, nameof(AnikiScreenSaverService) + ".LoadImage");
+
             try
             {
                 var bitmap = new BitmapImage();

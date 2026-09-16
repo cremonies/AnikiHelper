@@ -7378,6 +7378,8 @@ namespace AnikiHelper.Services.AnikiThemeSettings
                 return cached;
             }
 
+            ImageLoadDiagnostics.LogIfThemesOptionAccess(filePath, nameof(AnikiThemeSettingsService) + "." + nameof(GetOrLoadResourceDictionary));
+
             var fileUri = new Uri(filePath, UriKind.Absolute);
 
             using (var stream = File.OpenRead(filePath))
@@ -7454,6 +7456,8 @@ namespace AnikiHelper.Services.AnikiThemeSettings
                 {
                     return false;
                 }
+
+                ImageLoadDiagnostics.LogIfThemesOptionAccess(filePath, nameof(AnikiThemeSettingsService) + "." + nameof(CanPreloadResourceFile));
 
                 var text = File.ReadAllText(filePath);
 

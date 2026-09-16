@@ -940,6 +940,8 @@ namespace AnikiHelper.Services.GameList
                         return;
                     }
 
+                    global::AnikiHelper.Services.UI.ImageLoadDiagnostics.LogIfThemesOptionAccess(path, nameof(AnikiExperimentalGameListControl) + ".SetFallbackSource");
+
                     var bitmap = new BitmapImage();
                     bitmap.BeginInit();
                     bitmap.CacheOption = BitmapCacheOption.OnLoad;

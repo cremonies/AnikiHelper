@@ -90,6 +90,8 @@ namespace AnikiHelper.Services.UI
 
         private static BitmapSource LoadBitmap(string normalizedSource, int decodePixelWidth)
         {
+            ImageLoadDiagnostics.LogIfThemesOptionAccess(normalizedSource, nameof(ImageMemoryCache) + "." + nameof(LoadBitmap));
+
             try
             {
                 var bitmap = new BitmapImage();
