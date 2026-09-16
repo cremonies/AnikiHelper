@@ -6,6 +6,7 @@ using AnikiHelper.Services.CompletePacks;
 using AnikiHelper.Services.LoginPacks;
 using AnikiHelper.Services.SoundPacks;
 using AnikiHelper.Services.VisualPacks;
+using AnikiHelper.Services.UI;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -1804,34 +1805,17 @@ namespace AnikiHelper.Services.AnikiThemeSettings
             }
         }
 
-        private static BitmapImage LoadOverlayBitmap(string path, int decodePixelWidth)
+        private static BitmapSource LoadOverlayBitmap(string path, int decodePixelWidth)
         {
             if (!IsExistingLocalFile(path))
             {
                 return null;
             }
 
-            try
-            {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                if (decodePixelWidth > 0)
-                {
-                    bitmap.DecodePixelWidth = decodePixelWidth;
-                }
-                bitmap.UriSource = new Uri(path, UriKind.Absolute);
-                bitmap.EndInit();
-                if (bitmap.CanFreeze)
-                {
-                    bitmap.Freeze();
-                }
-                return bitmap;
-            }
-            catch
-            {
-                return null;
-            }
+            // Route through the shared in-memory cache instead of decoding from disk on every
+            // call. Focus/selection changes call this repeatedly for the same overlay paths
+            // (focused-cover background/logo, trailer-failed fallback, media-card fallback).
+            return ImageMemoryCache.GetOrLoad(path, decodePixelWidth);
         }
 
         private void ClearFocusedCoverOverlayVisualCache()
