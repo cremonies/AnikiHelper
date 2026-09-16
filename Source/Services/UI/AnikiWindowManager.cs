@@ -1021,6 +1021,8 @@ namespace AnikiHelper.Services
                     window.Background = Brushes.Transparent;
                 }
 
+                AnikiLazyThemeResources.EnsureStyleLoaded(playniteApi, styleKey);
+
                 var style = Application.Current.TryFindResource(styleKey) as Style;
                 if (style == null)
                 {

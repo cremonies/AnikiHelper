@@ -138,6 +138,7 @@
     <Compile Include="Services\WebBrowser\AnikiWebBrowserHomeView.cs" />
     <Compile Include="Services\WebBrowser\AnikiWebBrowserService.cs" />
     <Compile Include="Services\UI\AnikiWindowManager.cs" />
+    <Compile Include="Services\UI\AnikiLazyThemeResources.cs" />
     <Compile Include="Services\Controller\AnikiControllerCommandsControl.cs" />
     <Compile Include="Services\Controller\AnikiControllerInput.cs" />
     <Compile Include="Services\Controller\AnikiControllerShortcutControl.cs" />
